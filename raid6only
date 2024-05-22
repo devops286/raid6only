@@ -1,53 +1,81 @@
 #!/bin/bash
+
+set -e
+
 case "$1" in
   raid6)
+        echo "Stopping services..."
         systemctl stop xymon
         systemctl stop rsyslog
         systemctl stop SplunkForwarder.service
-        lsof | grep /apps && echo "Close all open files on /apps" && exit 1
-        echo "Starting removal of apps disk"
-        umount /apps || echo "unable to umount /apps"
-        mount | grep apps && exit 1
+
+        if lsof | grep /apps; then
+            echo "Close all open files on /apps"
+            exit 1
+        fi
+
+        echo "Starting removal of apps disk..."
+        umount /apps || { echo "Unable to unmount /apps"; exit 1; }
+
+        if mount | grep /apps; then
+            exit 1
+        fi
+
         lvremove -f /dev/appvg/appsvol
         vgchange -an appvg
         vgremove -f appvg
         pvremove -f /dev/sdb1
         wipefs --all /dev/sdb
         echo 1 > /sys/class/block/sdb/device/delete
+
         /opt/MegaRAID/perccli/perccli64 /c0/v1 del force
         /opt/MegaRAID/perccli/perccli64 /c0/e64/s6 delete hotsparedrive
-        #
-        echo "Recreating RAID6"
+
+        echo "Recreating RAID6..."
         /opt/MegaRAID/perccli/perccli64 /c0 add vd type=raid6 drives=64:2-6
+
         /usr/bin/scsi-rescan -a
         wipefs --all /dev/sdb
-        /sbin/parted /dev/sdb 'mklabel gpt' -s
-        /sbin/parted /dev/sdb 'mkpart primary 0% 100%' -s
+
+        echo "Setting up new partition and volume..."
+        /sbin/parted /dev/sdb mklabel gpt -s
+        /sbin/parted /dev/sdb mkpart primary 0% 100% -s
+
         /usr/sbin/pvcreate /dev/sdb1
         /usr/sbin/vgcreate appvg /dev/sdb1
         /usr/sbin/lvcreate -l+100%FREE appvg -n appsvol -W y --yes
+
         sleep 3
+
         /usr/sbin/mkfs.xfs -f /dev/mapper/appvg-appsvol
         /usr/bin/mount -a
+
+        echo "Setting permissions..."
         /usr/bin/chown miaxots:miaxots /apps
         /usr/bin/chmod 775 /apps
         ln -s /opt/xymon /apps/xymon
+
         mkdir /apps/core
         /usr/bin/chown root:miaxlogs /apps/core
         /usr/bin/chmod 775 /apps/core
+
         mkdir /apps/logs
         /usr/bin/chown miaxots:miaxlogs /apps/logs
         /usr/bin/chmod 755 /apps/logs
+
+        echo "Starting services..."
         systemctl start xymon
         systemctl start rsyslog
+
         logger -p local6.warn "test"
         logrotate -f /etc/logrotate.d/miax
+
         chgrp miaxlogs /apps/logs/miax.log.1.gz
         chmod 755 /apps/logs/miax.log.1.gz
         ;;
   *)
-        echo $"Usage: $0 {raid6|raid10}"
+        echo "Usage: $0 {raid6|raid10}"
         exit 2
+        ;;
 esac
 
-[ctarar@dny2i1gws01 ~]$
